@@ -1,0 +1,63 @@
+{
+  "repo": "seeded_fixture",
+  "source": "local://backend/benchmark_data/seeded_fixture",
+  "language": "python",
+  "completeness": "complete",
+  "note": "Self-contained, fully-labeled fixture. Every real bug and every known-safe lookalike is labeled, so precision/recall are exact and deterministic (no AI/Docker needed). Used to regression-test the discovery + tier-0 prefilter layer.",
+  "ground_truth": [
+    {
+      "id": "SEED-CMD-1",
+      "bug_class": "command_injection",
+      "file": "app/exec_handler.py",
+      "line": 12,
+      "sink_hint": "os.system with attacker-controlled arg",
+      "label": "true_positive",
+      "expected_status": "report-eligible",
+      "cvss_max": 9.8,
+      "provenance": {"type": "seeded"},
+      "notes": "os.system('convert ' + user_input) — classic command injection."
+    },
+    {
+      "id": "SEED-EVAL-1",
+      "bug_class": "code_injection",
+      "file": "app/exec_handler.py",
+      "line": 17,
+      "sink_hint": "eval of attacker expression",
+      "label": "true_positive",
+      "expected_status": "report-eligible",
+      "cvss_max": 9.8,
+      "provenance": {"type": "seeded"},
+      "notes": "eval(expr) on untrusted input."
+    },
+    {
+      "id": "SEED-RB-EVAL-1",
+      "bug_class": "code_injection",
+      "file": "lib/parser.rb",
+      "line": 5,
+      "sink_hint": "instance_eval on untrusted source",
+      "label": "true_positive",
+      "expected_status": "report-eligible",
+      "cvss_max": 9.5,
+      "provenance": {"type": "seeded"},
+      "notes": "Ruby instance_eval(src) — code injection."
+    },
+    {
+      "id": "SEED-SAFE-TEST",
+      "bug_class": "command_injection",
+      "file": "tests/test_exec.py",
+      "sink_hint": "os.system inside a test file",
+      "label": "known_safe",
+      "provenance": {"type": "seeded"},
+      "notes": "Sink lives in a TEST file — tier-0 must suppress it. A lead here is a discovery false positive."
+    },
+    {
+      "id": "SEED-SAFE-VENDOR",
+      "bug_class": "code_injection",
+      "file": "vendor/thirdparty.py",
+      "sink_hint": "eval inside vendored code",
+      "label": "known_safe",
+      "provenance": {"type": "seeded"},
+      "notes": "Sink lives in VENDORED code (out of trust scope) — tier-0 must suppress it."
+    }
+  ]
+}

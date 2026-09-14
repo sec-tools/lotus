@@ -1,0 +1,31 @@
+{
+  "repo": "pdf-reader",
+  "source": "https://github.com/yob/pdf-reader",
+  "language": "ruby",
+  "completeness": "partial",
+  "note": "Partial manifest. pdf-reader has no CVEs; ground truth is drawn from public, verifiable maintainer bug reports/fixes. These are DoS/parser-robustness issues: a high-quality audit should surface them but score them LATENT (availability-only), NOT over-claim them as RCE. Recall is measured over these known bugs; precision is measured on known-safe over-claims; unlabeled report-eligible findings are surfaced for review, not counted as FPs.",
+  "ground_truth": [
+    {
+      "id": "PDFR-DOS-1",
+      "bug_class": "denial_of_service",
+      "file": "lib/pdf/reader/page.rb",
+      "sink_hint": "infinite recursion in Page#ancestors when the ancestor chain contains a loop",
+      "label": "true_positive",
+      "expected_status": "latent",
+      "cvss_max": 5.3,
+      "provenance": {"type": "github_pr", "ref": "#567", "url": "https://github.com/yob/pdf-reader/pull/567"},
+      "notes": "Malformed PDF with a loop in a Page's ancestors causes unbounded recursion (stack overflow / hang). DoS-only — must be scored latent, never report-eligible RCE."
+    },
+    {
+      "id": "PDFR-DOS-2",
+      "bug_class": "denial_of_service",
+      "file": "lib/pdf/reader/buffer.rb",
+      "sink_hint": "100% CPU / hang parsing crafted malformed PDFs",
+      "label": "true_positive",
+      "expected_status": "latent",
+      "cvss_max": 5.3,
+      "provenance": {"type": "github_issue", "ref": "#450", "url": "https://github.com/yob/pdf-reader/issues/450"},
+      "notes": "Fuzz-discovered malformed PDFs cause the tokenizer/buffer to hang (execution expired). DoS-only."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "repo": "blazingmq",
+  "source": "https://github.com/bloomberg/blazingmq",
+  "language": "c/cpp",
+  "completeness": "partial",
+  "note": "Partial, PRECISION-focused manifest. BlazingMQ has no public CVE. The one publicly documented fuzz finding (an assertion crash in Event::initialize) is UNREACHABLE in production due to the framing layer, so it is labeled known_safe: a high-quality audit must NOT report it as an exploitable vulnerability. This manifest therefore measures false-positive elimination (reachability gate) on a real target. Add confirmed true-positives here if/when advisories are published.",
+  "ground_truth": [
+    {
+      "id": "BMQ-SAFE-1",
+      "bug_class": "memory_corruption",
+      "file": "bmqp_event.h",
+      "line": 316,
+      "sink_hint": "assertion d_header->length() == blob->length() in Event::initialize",
+      "label": "known_safe",
+      "provenance": {"type": "github_pr", "ref": "#1582", "url": "https://github.com/bloomberg/blazingmq/pull/1582"},
+      "notes": "Fuzz test found an input that fails the assertion in safe/debug builds, but bmqio::ChannelUtil::handleRead frames incoming packets to the declared length BEFORE they reach bmqp::Event, guaranteeing the invariant in production. Not reachable by an attacker -> must NOT be reported as exploitable (reachability gate must reject)."
+    }
+  ]
+}

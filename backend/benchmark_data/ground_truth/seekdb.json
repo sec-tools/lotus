@@ -1,0 +1,13 @@
+{
+  "repo": "seekdb",
+  "source": "https://github.com/oceanbase/seekdb",
+  "language": "c/cpp",
+  "completeness": "partial",
+  "note": "TEMPLATE — no fabricated bugs. seekdb (OceanBase) is a large C/C++ database; its highest-signal audit surface is the SQL parser/optimizer, the wire/RPC protocol decoders, and any shell-out in tooling. Populate `ground_truth` from OceanBase security advisories / OSS-Fuzz / your own confirmed findings before using this for scoring. Until then the runner reports it as SURFACE-ONLY (no labeled ground truth) so recall/precision are not falsely reported as perfect.",
+  "audit_surface_hints": [
+    {"area": "SQL parser / lexer", "why": "attacker-controlled query text; parser-boundary + integer-overflow + memory-corruption risk"},
+    {"area": "wire/RPC decoders", "why": "attacker-controlled bytes reach length/offset math (integer_overflow, memory_corruption)"},
+    {"area": "server tooling / import-export", "why": "possible command_injection / path_traversal in ops utilities"}
+  ],
+  "ground_truth": []
+}
