@@ -1,0 +1,19 @@
+# Python 3.12+. Direct dependencies; full resolution is in requirements.lock.
+aiofiles==25.1.0
+cryptography==50.0.1
+fastapi==0.141.1
+fpdf2==2.8.8
+gunicorn==26.2.0
+httpx==0.28.1
+langchain-anthropic==1.7.1
+langchain-core==1.6.2
+langchain-ollama==1.1.0
+langchain-openai==1.6.2
+langgraph==1.2.11
+psutil==7.2.2
+psycopg2-binary==2.9.12
+pydantic==2.13.5
+pytest==9.1.1
+python-multipart==0.0.32
+SQLAlchemy==2.0.52
+uvicorn[standard]==0.52.4
