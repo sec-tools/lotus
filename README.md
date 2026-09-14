@@ -2,27 +2,7 @@
 
 Lotus is an experimental codebase audit and triage platform for security researchers and product security teams, developed through security research and iterative testing. AI assists lab planning, test selection and analysis; supported dynamic tools run in a local lab, with results and coverage gaps carried into interactive reports.
 
-```mermaid
-%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"17px","lineColor":"#64748b","primaryTextColor":"#0f172a"},"flowchart":{"curve":"basis","nodeSpacing":18,"rankSpacing":24,"padding":10,"wrappingWidth":270}}}%%
-flowchart TD
-    C(["`**Clone repo**`"]) --> S("`**Static analysis**`")
-    C --> B("`**Build local lab**`")
-    B --> D("`**Dynamic testing**`")
-    S --> A("`**AI Analysis**`")
-    D --> A
-    A --> T("`**Triage and reproduce findings**`")
-    T --> R(["`**Generate report**`"])
-    classDef input fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
-    classDef analysis fill:#eef2ff,stroke:#818cf8,color:#312e81
-    classDef lab fill:#eff6ff,stroke:#60a5fa,color:#172554
-    classDef review fill:#ccfbf1,stroke:#0f766e,color:#134e4a
-    classDef output fill:#0f172a,stroke:#0f172a,color:#f8fafc
-    class C input
-    class S,A analysis
-    class B,D lab
-    class T review
-    class R output
-```
+<img width="457" height="834" alt="lotus-diagram" src="https://github.com/user-attachments/assets/02e7d46c-6598-4040-9792-a56460ffa385" />
 
 [Features](#features) · [Quickstart](#quickstart) · [Web UI](#web-ui) · [Audits](#audit-workflow) · [Interactive reports](#interactive-reports) · [Deployments](#deployment-inventory) · [API / SDK](#api-and-sdk) · [Architecture](#architecture-and-isolation) · [Setup](#deployment-options) · [Operations](#operations) · [Python / export](#python-environment-and-source-export)
 
