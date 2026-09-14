@@ -1,0 +1,99 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lotus
+  namespace: lotus
+spec:
+  podSelector:
+    matchLabels:
+      app: lotus
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+    # HTTPS for API providers and git clone
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Kubernetes API endpoint used by kind and many self-managed clusters.
+    # Scope is the controller app=lotus; untrusted Job egress stays restricted.
+    # Adapt this port if the cluster API endpoint uses a nonstandard TLS port.
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 6443
+    # Controller health checks and observations reach the selected local lab.
+    # This permits outbound controller traffic only; lab egress stays empty.
+    - to:
+        - podSelector:
+            matchLabels:
+              role: lab-container
+      ports:
+        - protocol: TCP
+    # HTTP for git clone and local model servers
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 80
+    # PostgreSQL (enterprise overlay labels the DB app: lotus-postgres)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: lotus-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Ollama default port (local model server)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 11434
+    # LM Studio default port
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 1234
+---
+# Lab container isolation: zero egress after Phase 1
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lotus-lab-isolated
+  namespace: lotus
+spec:
+  podSelector:
+    matchLabels:
+      role: lab-container
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only accept traffic from lotus app pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app: lotus
+      ports:
+        - protocol: TCP
+  egress: []
+  # Zero egress: lab containers cannot reach external network

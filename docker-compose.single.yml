@@ -1,0 +1,45 @@
+# =====================================================================
+# Lotus — SINGLE-USER deployment (laptop / one VM).
+# One app process + SQLite in a mounted volume + host Docker socket for labs.
+# Turnkey:  docker compose -f docker-compose.single.yml up --build
+# UI:       http://127.0.0.1:${LOTUS_HTTP_PORT:-8000}   Health: /healthz  Ready: /readyz
+#
+# This profile uses one application instance and one API worker with SQLite.
+# For shared use or horizontal scale, use docker-compose.yml (Postgres) or k8s/;
+# review the deployment boundaries in README.md first.
+# =====================================================================
+services:
+  lotus:
+    build: .
+    # Keep the image startup path: it initializes private writable tool/cache
+    # directories and runs Nginx plus one API worker for this single profile.
+    ports:
+      - "127.0.0.1:${LOTUS_HTTP_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Docker Desktop presents its mounted socket with GID 0. On Linux, set
+    # DOCKER_GID in .env to `stat -Lc '%g' /var/run/docker.sock`. Keep the app
+    # non-root and grant only the supplementary group needed by the socket.
+    group_add:
+      - "${DOCKER_GID:-0}"
+    environment:
+      - DATABASE_URL=sqlite:////app/data/lotus.db
+      - LOTUS_DEPLOY_PROFILE=single
+      - LOTUS_REQUIRE_LAB_PROOF=1
+      - LOTUS_LAB_PROVIDER=docker
+      - LOTUS_NO_SEED=${LOTUS_NO_SEED:-1}
+      - LOTUS_SECRET_KEY=${LOTUS_SECRET_KEY:-}
+      - LOTUS_PROOF_SIGNING_KEY=${LOTUS_PROOF_SIGNING_KEY:-}
+      - LOTUS_AUTH_TOKEN=${LOTUS_AUTH_TOKEN:-}
+      - LOTUS_CORS_ORIGINS=${LOTUS_CORS_ORIGINS:-http://127.0.0.1:${LOTUS_HTTP_PORT:-8000},http://localhost:${LOTUS_HTTP_PORT:-8000}}
+      - LOTUS_MAX_CONCURRENT_SCANS=${LOTUS_MAX_CONCURRENT_SCANS:-1}
+      - LOTUS_DATA_DIR=/app/data
+      - WEB_CONCURRENCY=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

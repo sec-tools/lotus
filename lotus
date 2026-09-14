@@ -1,0 +1,5 @@
+#!/bin/sh
+# Keep paths quoted so the checkout can live in a directory containing spaces.
+set -eu
+LOTUS_LAUNCH_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "${LOTUS_PYTHON:-python3}" "$LOTUS_LAUNCH_ROOT/scripts/quickstart.py" "$@"

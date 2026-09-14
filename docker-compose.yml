@@ -1,0 +1,60 @@
+# =====================================================================
+# Lotus — TEAM deployment (Postgres). Suitable for multi-worker / small teams.
+# Secrets come from .env (copy .env.example → .env). Shared profile startup is
+# fail-closed unless the operator explicitly acknowledges any host Docker socket.
+# For a solo laptop use docker-compose.single.yml; for a cluster see k8s/ and
+# README.md. Shared authentication and an explicit lab
+# runner boundary are required before exposure. The default profile has no host
+# Docker socket and is candidate-only; use docker-compose.host-lab.yml only on a
+# dedicated disposable runner. For cluster labs
+# see k8s/overlays/enterprise. Do not publish port 8000 to untrusted networks
+# without LOTUS_AUTH_TOKEN and a TLS terminator.
+# =====================================================================
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lotus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-lotus}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lotus}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  lotus:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - lotus-data:/app/data
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lotus}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-lotus}
+      - LOTUS_DEPLOY_PROFILE=team
+      - LOTUS_AUTH_TOKEN=${LOTUS_AUTH_TOKEN:?Set LOTUS_AUTH_TOKEN in .env}
+      - LOTUS_PROOF_SIGNING_KEY=${LOTUS_PROOF_SIGNING_KEY:?Set LOTUS_PROOF_SIGNING_KEY in .env}
+      - LOTUS_SECRET_KEY=${LOTUS_SECRET_KEY:-}
+      - LOTUS_NO_SEED=${LOTUS_NO_SEED:-}
+      - LOTUS_LAB_PROVIDER=${LOTUS_LAB_PROVIDER:-k8s-job}
+      - LOTUS_LAB_PROVIDER_STRICT=${LOTUS_LAB_PROVIDER_STRICT:-1}
+      - LOTUS_ALLOW_HOST_DOCKER_SOCKET=${LOTUS_ALLOW_HOST_DOCKER_SOCKET:-0}
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
+      - LOTUS_DATA_DIR=/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  lotus-data:
+  pgdata:

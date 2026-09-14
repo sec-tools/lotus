@@ -1,0 +1,175 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lotus
+  namespace: lotus
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: lotus
+  template:
+    metadata:
+      labels:
+        app: lotus
+    spec:
+      automountServiceAccountToken: false
+      serviceAccountName: lotus-lab-runner
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: lotus
+          image: lotus:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              value: sqlite:////app/data/lotus.db
+            - name: PYTHONPATH
+              value: /app
+            - name: LOTUS_ENV
+              value: local
+            - name: LOTUS_TIER0_FILTER
+              value: "1"
+            - name: LOTUS_MAX_CONCURRENT_SCANS
+              value: "1"
+            - name: LOTUS_NO_SEED
+              value: "1"
+            - name: LOTUS_DEPLOY_PROFILE
+              value: single
+            - name: WEB_CONCURRENCY
+              value: "1"
+            - name: LOTUS_DATA_DIR
+              value: /app/data
+            - name: LOTUS_SKILLS_DIR
+              value: /app/data/skills
+            - name: KUBECONFIG
+              value: /var/run/secrets/kubernetes.io/serviceaccount/config
+            # No host Docker socket is mounted in the base cluster profile;
+            # labs are rendered as restricted, attested Jobs by the provider.
+            - name: LOTUS_LAB_PROVIDER
+              value: k8s-job
+            - name: LOTUS_RUNTIME
+              value: k8s-job
+            - name: LOTUS_LAB_PROVIDER_STRICT
+              value: "1"
+            - name: LOTUS_ALLOW_PROVIDER_FALLBACK
+              value: "0"
+            - name: LOTUS_REQUIRE_LAB_PROVIDER
+              value: "1"
+            - name: LOTUS_REQUIRE_LAB_PROOF
+              value: "1"
+            # Builder routing uses this node address without cluster-wide
+            # permission to enumerate Nodes.
+            - name: LOTUS_K8S_NODE_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.hostIP
+          volumeMounts:
+            # Only the trusted controller receives a rotating Kubernetes API
+            # credential. Untrusted lab/tool Jobs keep token automount disabled.
+            - name: controller-api
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: lotus-data
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-log
+              mountPath: /var/log/nginx
+            - name: run
+              mountPath: /run
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 500m
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          # Liveness = process up (no DB touch, avoids restart loops on DB lock).
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness = can serve (DB reachable + lab provider reported).
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            # An uncached control-plane/RBAC probe uses bounded API calls.
+            timeoutSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 20
+      volumes:
+        - name: controller-api
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: lotus-controller-kubeconfig
+                  items:
+                    - key: config
+                      path: config
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+        - name: lotus-data
+          persistentVolumeClaim:
+            claimName: lotus-data
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-log
+          emptyDir: {}
+        - name: run
+          emptyDir: {}

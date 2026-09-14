@@ -1,0 +1,17 @@
+# Explicit break-glass override for trusted, disposable runner hosts only.
+#
+# The team/enterprise base Compose files intentionally do not expose the host
+# Docker daemon. Use this file only when the operator accepts that a repository
+# build can control the daemon and has isolated the machine accordingly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host-lab.yml up --build
+#
+# The same override can be layered on docker-compose.enterprise.yml.
+services:
+  lotus:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      LOTUS_LAB_PROVIDER: docker
+      LOTUS_LAB_PROVIDER_STRICT: "0"
+      LOTUS_ALLOW_HOST_DOCKER_SOCKET: "1"

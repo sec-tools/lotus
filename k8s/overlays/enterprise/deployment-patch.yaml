@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lotus
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  template:
+    spec:
+      containers:
+        - name: lotus
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: lotus-enterprise
+                  key: database-url
+            - name: LOTUS_DEPLOY_PROFILE
+              value: enterprise
+            - name: LOTUS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lotus-enterprise
+                  key: auth-token
+            - name: WEB_CONCURRENCY
+              value: "2"
+            - name: LOTUS_NO_SEED
+              value: "1"
+            - name: LOTUS_LAB_PROVIDER
+              value: k8s-job
+            - name: LOTUS_LAB_PROVIDER_STRICT
+              value: "1"

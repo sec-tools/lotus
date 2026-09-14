@@ -1,0 +1,58 @@
+# Documentation-only example for a per-audit lab Job.  It is intentionally not
+# included by kustomization: applying a static Job at platform install time
+# would create an unbound pod.  ``backend.k8s_lab`` renders a target-bound Job
+# and ClusterIP Service for each ScanJob, waits for Ready, attests the pod/image,
+# and deletes both resources on teardown.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lotus-lab-template
+  namespace: lotus
+  labels:
+    role: lab-container
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        role: lab-container
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: lab
+          image: lotus-lab-ubuntu:26.04
+          imagePullPolicy: Never
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: lab-workspace
+              mountPath: /workspace
+            - name: lab-tmp
+              mountPath: /tmp
+      restartPolicy: Never
+      volumes:
+        - name: lab-workspace
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: lab-tmp
+          emptyDir:
+            sizeLimit: 512Mi
