@@ -58,7 +58,7 @@ Complete any Homebrew, Apple Command Line Tools or Docker Desktop prompts. On Li
 * `deps` installs missing macOS tools and opens Docker Desktop if needed. The launcher finds its per-user tools automatically; no PATH edit is needed for `./lotus`.
 * `up --check` checks prerequisites and capacity for a new installation, or readiness for a saved installation. It never installs dependencies or creates resources.
 * A plain first `./lotus up` can also install missing macOS dependencies. With any options, run `./lotus deps` first. Setup builds Lotus, creates Kind with Calico, checks network restrictions, deploys the app and finishes. It uses a private Python environment when needed.
-* `serve` opens the local UI using the saved configuration. No state path is needed.
+* `serve` opens the local UI using the saved configuration. The default installation is shared across checkouts for your OS user at `~/.local/share/lotus/installation`; no state path is needed.
 
 1. Open http://127.0.0.1:8000.
 2. In Settings → AI Model Source, save your provider/key, load models, select a text model and use Save & Test.
@@ -365,8 +365,7 @@ Before running `./lotus up --check`, ensure Docker has at least 7 GiB currently 
 On macOS, run `./lotus deps` before setup with custom options, or `./lotus deps --existing-context` for the existing-cluster route.
 
 ```sh
-./lotus up --check --state '<new-private-directory>' --name lotus-netpol-research \
-  --node-memory-gib 8 --node-cpus 4 --port 8001
+./lotus up --check --node-memory-gib 8 --node-cpus 4 --port 8001
 # Repeat without --check to create the new installation.
 
 ./lotus up --context '<existing-context>' \
@@ -376,7 +375,7 @@ On macOS, run `./lotus deps` before setup with custom options, or `./lotus deps 
 * Existing clusters need an enforcing CNI, persistent storage, node registry trust and installation permissions. This route needs no Docker or node modification.
 * Removal stops if existing-cluster storage uses a `Retain` policy; an administrator must handle that data explicitly.
 * Add `--kubeconfig PATH` or `--local-preloaded` as needed for setup.
-* Default commands find this checkout's saved installation automatically. Only a separate installation created with `--state PATH` needs that option on `serve` and `down` too.
+* Default commands use one shared installation across checkouts. Older installations under a checkout's `.lotus-local/quickstart` remain usable from that checkout. Default `down` removes both shared and checkout-local installations if both exist. A custom `--state PATH` still selects only that directory; use the same option for `serve` and `down`.
 * `up --check` checks a new installation's prerequisites or an existing installation's readiness without changing it. `up --no-serve` checks an existing installation without opening a UI connection.
 * Setup refuses same-named clusters and existing Lotus namespaces that it does not own. Saved ownership records protect unrelated resources during removal.
 
@@ -391,7 +390,7 @@ Ctrl-C during installation stops setup and keeps its private records and any res
 ./lotus serve
 ```
 
-Removal checks recorded resource identities before deleting anything. If an old or interrupted installation lacks enough ownership information, or a resource has been replaced, it stops and preserves the records for inspection. Check `quickstart.json`, `cluster/setup.log` and `cluster/ownership.json` under `.lotus-local/quickstart` (or the selected `--state` directory). Never delete those records before cleanup. A failed removal can be retried with `./lotus down`.
+Removal checks recorded resource identities before deleting anything. If an old or interrupted installation lacks enough ownership information, or a resource has been replaced, it stops and preserves the records for inspection. Check `quickstart.json`, `cluster/setup.log` and `cluster/ownership.json` under `~/.local/share/lotus/installation` (or the older checkout-local or selected `--state` directory). Never delete those records before cleanup. A failed removal can be retried with `./lotus down`.
 
 ### Manual Kubernetes setup
 

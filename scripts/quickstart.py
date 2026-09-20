@@ -31,7 +31,8 @@ if str(ROOT) not in sys.path:
 from scripts import bootstrap_kind, configure_local, deploy_kubernetes, prepare_release
 
 STATE_NAME = "quickstart.json"
-DEFAULT_STATE = ROOT / ".lotus-local/quickstart"
+DEFAULT_STATE = Path.home() / ".local/share/lotus/installation"
+LEGACY_STATE = ROOT / ".lotus-local/quickstart"
 OWNER_KEY = "lotus.io/quickstart-owner"
 STAGES = {"checking", "preparing-python", "preparing-image", "creating-cluster", "checking-network",
           "creating-config", "creating-resources", "waiting-controller", "ready", "failed"}
@@ -540,17 +541,17 @@ def parser():
     install.add_argument("--kubeconfig", type=Path)
     install.add_argument("--image", type=deploy_kubernetes.validate_image, help="prebuilt immutable Lotus image; required for existing Kubernetes")
     install.add_argument("--local-preloaded", action="store_true", help="existing cluster only: require application image already present, with pull policy Never")
-    install.add_argument("--state", type=Path, default=DEFAULT_STATE, help="advanced: use a separate private installation directory")
+    install.add_argument("--state", type=Path, help="advanced: override the shared private installation directory")
     install.add_argument("--name", default="lotus-netpol-local", help="fresh local cluster name (default lotus-netpol-local)")
     install.add_argument("--node-memory-gib", type=int, default=6)
     install.add_argument("--node-cpus", type=int, default=3)
     install.add_argument("--port", type=configure_local.validate_port, help="local UI port (default 8000 for a new installation, saved port otherwise)")
     install.add_argument("--no-serve", action="store_true", help="check readiness without opening the UI connection on an existing installation")
     reopen = sub.add_parser("serve", help="start the local UI connection using the saved Lotus installation")
-    reopen.add_argument("--state", type=Path, default=DEFAULT_STATE, help="advanced: select a separate installation")
+    reopen.add_argument("--state", type=Path, help="advanced: select an older or custom installation")
     reopen.add_argument("--port", type=configure_local.validate_port)
     remove = sub.add_parser("down", help="remove this Lotus installation and its audit data; preserve unrelated resources")
-    remove.add_argument("--state", type=Path, default=DEFAULT_STATE, help="advanced: select a separate installation")
+    remove.add_argument("--state", type=Path, help="advanced: remove only the installation at this location")
     return result
 
 
@@ -564,6 +565,23 @@ def main(argv=None):
         raise KeyboardInterrupt()
     previous = signal.signal(signal.SIGTERM, interrupt)
     try:
+        # Checkouts share one installation. Keep old checkout-local receipts
+        # usable in place: their absolute paths are part of cleanup ownership.
+        default_locations = [DEFAULT_STATE, LEGACY_STATE]
+        if args.state is None:
+            locations = [path for path in default_locations if path.exists() or path.is_symlink()]
+            if args.action == "down":
+                from scripts import installation_cleanup
+                for directory in locations or [DEFAULT_STATE]:
+                    if directory.exists() or directory.is_symlink():
+                        with installation_lock(directory):
+                            installation_cleanup.down(argparse.Namespace(state=directory))
+                    else:
+                        installation_cleanup.down(argparse.Namespace(state=directory))
+                return 0
+            if len(locations) > 1:
+                raise SetupError("Both shared and older checkout-local installations exist. Run ./lotus down before setting up Lotus again")
+            args.state = locations[0] if locations else DEFAULT_STATE
         def dispatch():
             if args.action == "up":
                 return up(args)

@@ -348,7 +348,9 @@ def down(args, *, run=None):
     directory = Path(args.state).expanduser().absolute()
     require(not any(p.is_symlink() for p in (directory, *directory.parents)), "Installation path contains a symlink")
     if not directory.exists():
-        print("No saved Lotus installation in this location; no resources were removed.", flush=True)
+        print("No saved Lotus installation at " + str(directory) + "; no resources were removed. "
+              "For an older checkout or custom installation, run ./lotus down from its original checkout "
+              "or use ./lotus down --state <installation-directory>.", flush=True)
         return {"removed": False, "already_absent": True}
     require(directory.is_dir() and directory not in {Path('/'), Path.home()} and directory.stat().st_mode & 0o077 == 0,
             "Installation state is not a private directory")
