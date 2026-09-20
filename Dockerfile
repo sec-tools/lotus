@@ -95,10 +95,21 @@ ENV JOERN_VERSION=2.0.392
 RUN --mount=type=cache,target=/var/cache/lotus-downloads \
     set -eu; \
     archive="/var/cache/lotus-downloads/joern-${JOERN_VERSION}.zip"; \
-    if { unzip -tq "$archive" >/dev/null 2>&1 || \
-         curl -sSfL --connect-timeout 15 --max-time 600 --continue-at - \
-           -o "$archive" "https://github.com/joernio/joern/releases/download/v${JOERN_VERSION}/joern-cli.zip"; } \
-       && printf '%s  %s\n' 'ea1fcd24a2f8a9a0c45fd718e76fe0270aab638924336604ae7a4c111b230a2c822d9e52cc3348ff53f2d57bdec896fe314eb7e12ce4ea9ecfc1bacb6c10e4a5' "$archive" | sha512sum --check \
+    expected='ea1fcd24a2f8a9a0c45fd718e76fe0270aab638924336604ae7a4c111b230a2c822d9e52cc3348ff53f2d57bdec896fe314eb7e12ce4ea9ecfc1bacb6c10e4a5'; \
+    attempt=1; verified=0; \
+    while [ "$attempt" -le 3 ]; do \
+      if unzip -tq "$archive" >/dev/null 2>&1; then \
+        if printf '%s  %s\n' "$expected" "$archive" | sha512sum --check; then verified=1; break; fi; \
+        rm -f "$archive"; \
+      fi; \
+      if curl -sSfL --connect-timeout 15 --max-time 600 --continue-at - \
+           -o "$archive" "https://github.com/joernio/joern/releases/download/v${JOERN_VERSION}/joern-cli.zip"; then \
+        if printf '%s  %s\n' "$expected" "$archive" | sha512sum --check; then verified=1; break; fi; \
+        rm -f "$archive"; \
+      fi; \
+      attempt=$((attempt + 1)); \
+    done; \
+    if [ "$verified" -eq 1 ] \
        && unzip -q "$archive" -d /opt \
        && test -x /opt/joern-cli/joern; then \
       mv /opt/joern-cli /opt/joern; \

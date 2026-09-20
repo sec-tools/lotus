@@ -10,6 +10,7 @@ memory/CPU before creation; this command does not resize the Docker VM.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import importlib.util
 import ipaddress
@@ -42,6 +43,10 @@ CHECKS["actual worker process is nonroot, tokenless, capability-free and seccomp
     "uid": 1000, "token": False, "capabilities_empty": True, "no_new_privs": True, "seccomp_filter": True}
 SOURCES = ("scripts/bootstrap_kind.py", "k8s/kind-config.yaml", "k8s/verification/setup_cluster.py", "k8s/verification/kind-calico.yaml",
            "k8s/verification/node_capacity.py", "k8s/verification/network_policy_preflight.py", "k8s/networkpolicy.yaml")
+
+
+class ProcessCleanupUnconfirmed(RuntimeError):
+    """The owned command group did not complete its drain contract."""
 
 
 def sha(path):
@@ -113,34 +118,41 @@ def command(argv, *, timeout=30, env=None, data=None, log=None):
         try:
             process.communicate(data.encode() if data is not None else None, timeout=timeout)
         except BaseException:
-            if log is not None:
-                output.seek(0)
-                Path(log).write_bytes(output.read(2 * 1024 * 1024))
-            # Do not reap the leader before terminating its group: descendants
-            # can outlive the leader, and its unreaped PID cannot be reused.
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            time.sleep(.2)
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                # Darwin can return EPERM for an already empty group. A real
-                # surviving process must still fail closed below.
-                groups = subprocess.run(["ps", "-axo", "pgid=,stat="], capture_output=True,
-                                        text=True, check=True, timeout=2).stdout
-                if any(len(parts := line.split()) == 2 and parts[0] == str(process.pid)
-                       and not parts[1].startswith("Z") for line in groups.splitlines()):
-                    raise RuntimeError("Bootstrap command still has a live process group; cleanup is unconfirmed")
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired as error:
-                raise RuntimeError("Bootstrap command cleanup remains unconfirmed; inspect owned infrastructure") from error
-            if process.stdin is not None:
-                process.stdin.close()
+                if log is not None:
+                    try:
+                        output.seek(0)
+                        Path(log).write_bytes(output.read(2 * 1024 * 1024))
+                    except Exception:
+                        # Diagnostics must never prevent the owned group drain.
+                        pass
+                # Do not reap the leader before terminating its group: descendants
+                # can outlive the leader, and its unreaped PID cannot be reused.
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                time.sleep(.2)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    # Darwin can return EPERM for an already empty group. A real
+                    # surviving process must still fail closed below.
+                    groups = subprocess.run(["ps", "-axo", "pgid=,stat="], capture_output=True,
+                                            text=True, check=True, timeout=2).stdout
+                    if any(len(parts := line.split()) == 2 and parts[0] == str(process.pid)
+                           and not parts[1].startswith("Z") for line in groups.splitlines()):
+                        raise RuntimeError("Bootstrap command still has a live process group; cleanup is unconfirmed")
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired as error:
+                    raise RuntimeError("Bootstrap command cleanup remains unconfirmed; inspect owned infrastructure") from error
+                if process.stdin is not None:
+                    process.stdin.close()
+            except BaseException as cleanup_error:
+                raise ProcessCleanupUnconfirmed("Bootstrap command process cleanup is unconfirmed; preserve owned infrastructure") from cleanup_error
             raise
         output.seek(0)
         raw = output.read(2 * 1024 * 1024 + 1)
@@ -208,6 +220,85 @@ def cleanup_probes(kube, names, report, *, run=command, env=None):
     return True
 
 
+
+def checkpoint_partial_node(value, *, root=ROOT, run=command, env=None):
+    """Checkpoint this creator's partial child after its setup process drained.
+
+    This is not discovery for down or a retry. Hard kill/power loss before this
+    handler still leaves uncertain ownership for explicit operator inspection.
+    """
+    def require(ok):
+        if not ok:
+            raise RuntimeError("Partial Kind node ownership could not be confirmed")
+
+    directory = Path(value["directory"])
+    own_path, boot_path = directory / "ownership.json", directory / "bootstrap.json"
+    if not own_path.exists():
+        return {"status": "no-ownership-checkpoint"}
+    require(not any(p.is_symlink() for p in (directory, *directory.parents, own_path, boot_path)))
+    require(own_path.stat().st_size <= 262144 and boot_path.stat().st_size <= 262144)
+    own_raw, boot_raw = own_path.read_bytes(), boot_path.read_bytes()
+    own = json.loads(own_raw)
+    require(isinstance(own, dict) and json.loads(boot_raw) == value)
+    if own.get("state") != "network-created":
+        return {"status": "checkpoint-not-needed"}
+    require(not own.get("docker_container_id"))
+    require(value.get("state") == "creating" and value.get("existing_clusters_modified") is False)
+    require(set(value.get("source_sha256", {})) == set(SOURCES)
+            and all(sha(root / name) == expected for name, expected in value["source_sha256"].items()))
+    from k8s.verification.setup_cluster import NODE_IMAGE
+    cluster, network_id = value["cluster"], own.get("docker_network_id", "")
+    require(re.fullmatch(r"[a-f0-9]{64}", network_id) and own.get("node_image") == NODE_IMAGE)
+    require(all(own.get(k) == v for k, v in {"cluster": cluster, "context": value["context"],
+        "kubeconfig": value["kubeconfig"], "docker_network": cluster,
+        "node": cluster + "-control-plane", "existing_clusters_modified": False}.items()))
+    started, now = value.get("started_at"), time.time()
+    require(type(started) in (int, float) and 0 <= now - started <= 4250)
+    require(env and env.get("DOCKER_HOST") == value.get("docker_endpoint")
+            and isinstance(value.get("docker_endpoint"), str) and value["docker_endpoint"].startswith("unix://"))
+
+    def read(args):
+        raw = run(["docker", *args], timeout=5, env=env)
+        require(isinstance(raw, str) and len(raw) <= 262144)
+        return raw
+
+    require(isinstance(own.get("docker_engine_id"), str) and 1 <= len(own["docker_engine_id"]) <= 256)
+    require(json.loads(read(["info", "--format", "{{json .ID}}"] )) == own["docker_engine_id"])
+    def network():
+        rows = json.loads(read(["network", "inspect", network_id]))
+        require(isinstance(rows, list) and len(rows) == 1)
+        net = rows[0]
+        require(net.get("Id") == network_id and net.get("Name") == cluster and net.get("Labels") == OWNER)
+        return net
+    net = network(); members = net.get("Containers", {})
+    require(isinstance(members, dict) and len(members) <= 1)
+    if not members:
+        return {"status": "no-partial-node"}
+    cid = next(iter(members)); require(re.fullmatch(r"[a-f0-9]{64}", cid))
+    form = '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}},"created":{{json .Created}}}'
+    node = json.loads(read(["inspect", "--format", form, cid]))
+    require(node.get("id") == cid and node.get("name") == "/" + own["node"] and node.get("image") == NODE_IMAGE)
+    require(node.get("labels", {}).get("io.x-k8s.kind.cluster") == cluster
+            and node.get("labels", {}).get("io.x-k8s.kind.role") == "control-plane")
+    require(set(node.get("networks", {})) == {cluster}
+            and node["networks"][cluster].get("NetworkID") == network_id)
+    stamp = node.get("created", "")
+    require(isinstance(stamp, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z", stamp))
+    # Docker emits nanoseconds; Python 3.9 accepts only microsecond precision.
+    normalized = stamp[:19] + "." + stamp[20:-1].ljust(6, "0")[:6] + "+00:00"
+    created = datetime.fromisoformat(normalized).timestamp()
+    require(started - 5 <= created <= now + 5)
+    require(read(["ps", "-aq", "--no-trunc", "--filter", "label=io.x-k8s.kind.cluster=" + cluster]).split() == [cid])
+    require(network() == net and json.loads(read(["inspect", "--format", form, cid])) == node)
+    require(own_path.read_bytes() == own_raw and boot_path.read_bytes() == boot_raw
+            and all(sha(root / name) == expected for name, expected in value["source_sha256"].items()))
+    own.update(docker_container_id=cid, partial_node_checkpoint={"created_at": stamp,
+               "observed_at": time.time(), "setup_completed": False})
+    # Keep state=network-created: this is cleanup authority, never readiness.
+    save(own_path, own)
+    return {"status": "partial-node-recorded", "container_id": cid}
+
+
 def create(value, *, root=ROOT, run=command, prepare_probe=None, python_executable=None):
     if value.get("probe_image") is None and prepare_probe is None:
         raise ValueError("A deferred probe requires an owned-node image preparation callback")
@@ -234,13 +325,16 @@ def create(value, *, root=ROOT, run=command, prepare_probe=None, python_executab
     namespace = "lotus-netpol-" + uuid.uuid4().hex[:16]
     names = [namespace, namespace + "-sink"]
     kube = ["kubectl", "--kubeconfig", value["kubeconfig"], "--context", value["context"]]
+    setup_started = setup_returned = False
     try:
         if any(sha(root / name) != expected for name, expected in value["source_sha256"].items()):
             raise RuntimeError("Bootstrap helpers changed after the plan was captured")
         print("Creating a separate kind cluster with pinned Calico…", flush=True)
+        setup_started = True
         run([python_executable, str(root / "k8s/verification/setup_cluster.py"), "--name", value["cluster"],
              "--directory", str(directory), "--node-memory-gib", str(value["node_memory_gib"]),
-             "--node-cpus", str(value["node_cpus"])], timeout=1200, env=env, log=directory / "setup.log")
+             "--node-cpus", str(value["node_cpus"])], timeout=4200, env=env, log=directory / "setup.log")
+        setup_returned = True
         ownership = json.loads((directory / "ownership.json").read_text())
         if ownership.get("cluster") != value["cluster"] or ownership.get("context") != value["context"] or ownership.get("kubeconfig") != value["kubeconfig"] or ownership.get("state") != "capacity-aligned":
             raise RuntimeError("Created cluster ownership/readiness record does not match the request")
@@ -277,6 +371,16 @@ def create(value, *, root=ROOT, run=command, prepare_probe=None, python_executab
         print("NetworkPolicy checks passed. Private kubeconfig: " + value["kubeconfig"], flush=True)
         return value
     except BaseException as error:
+        if setup_started and not setup_returned:
+            if isinstance(error, ProcessCleanupUnconfirmed):
+                value["partial_node_checkpoint"] = {"status": "process-cleanup-unconfirmed"}
+            else:
+                try:
+                    value["partial_node_checkpoint"] = checkpoint_partial_node(value, root=root, run=run, env=env)
+                except BaseException:
+                    # Preserve the original setup error/cancellation and every
+                    # uncertain resource; down must not infer identity from a name.
+                    value["partial_node_checkpoint"] = {"status": "ownership-unconfirmed"}
         value.update(state="failed", ready=False, error=str(error)[:800], finished_at=time.time())
         save(receipt, value)
         raise

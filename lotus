@@ -2,4 +2,44 @@
 # Keep paths quoted so the checkout can live in a directory containing spaces.
 set -eu
 LOTUS_LAUNCH_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "${LOTUS_PYTHON:-python3}" "$LOTUS_LAUNCH_ROOT/scripts/quickstart.py" "$@"
+for LOTUS_LAUNCH_DIR in /usr/local/bin /opt/homebrew/bin /Applications/Docker.app/Contents/Resources/bin "$HOME/Applications/Docker.app/Contents/Resources/bin" "$HOME/.docker/bin" "$HOME/.local/share/lotus/bin"; do
+    if [ -d "$LOTUS_LAUNCH_DIR" ]; then PATH="$PATH:$LOTUS_LAUNCH_DIR"; fi
+done
+if [ -d "$HOME/.local/share/lotus/bin" ]; then PATH="$HOME/.local/share/lotus/bin:$PATH"; fi
+export PATH
+LOTUS_LAUNCH_DEPS="$LOTUS_LAUNCH_ROOT/scripts/install_dependencies.sh"
+if [ "${1:-}" = deps ]; then
+    shift
+    exec /bin/sh "$LOTUS_LAUNCH_DEPS" "$@"
+fi
+# Advanced options, read-only/control commands and saved installations never
+# install dependencies implicitly. Use ./lotus deps explicitly for those paths.
+case "${1:-}" in
+    ''|--help|-h)
+        printf '%s\n' 'Usage: ./lotus {deps|up|serve|down} [options]' \
+            '  deps   Install missing Mac dependencies; use --existing-context for Python/kubectl only.' \
+            '  up     Set up Lotus, or start the saved installation.' \
+            '  serve  Open the saved installation UI connection.' \
+            '  down   Remove this installation and its audit data.' \
+            'Plain fresh ./lotus up can install missing Mac dependencies.' \
+            'Advanced setup: run ./lotus deps first, then ./lotus up --help.'
+        exit 0 ;;
+esac
+if [ "$#" = 1 ] && [ "$1" = up ] && [ "$(uname -s)" = Darwin ] \
+        && [ ! -e "$LOTUS_LAUNCH_ROOT/.lotus-local/quickstart" ] \
+        && [ ! -L "$LOTUS_LAUNCH_ROOT/.lotus-local/quickstart" ]; then
+    if ! /bin/sh "$LOTUS_LAUNCH_DEPS" --check; then
+        /bin/sh "$LOTUS_LAUNCH_DEPS"
+    fi
+fi
+# The installer can have created these paths after initial discovery.
+for LOTUS_LAUNCH_DIR in /usr/local/bin /opt/homebrew/bin /Applications/Docker.app/Contents/Resources/bin "$HOME/Applications/Docker.app/Contents/Resources/bin" "$HOME/.docker/bin" "$HOME/.local/share/lotus/bin"; do
+    if [ -d "$LOTUS_LAUNCH_DIR" ]; then PATH="$PATH:$LOTUS_LAUNCH_DIR"; fi
+done
+if [ -d "$HOME/.local/share/lotus/bin" ]; then PATH="$HOME/.local/share/lotus/bin:$PATH"; fi
+export PATH
+if ! LOTUS_LAUNCH_PYTHON=$(/bin/sh "$LOTUS_LAUNCH_DEPS" --python); then
+    printf '%s\n' 'No usable Python was selected. Run ./lotus deps on macOS, or correct LOTUS_PYTHON. This command did not install dependencies.' >&2
+    exit 1
+fi
+exec "$LOTUS_LAUNCH_PYTHON" "$LOTUS_LAUNCH_ROOT/scripts/quickstart.py" "$@"

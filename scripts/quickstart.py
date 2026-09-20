@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Lotus in a fresh owned Kind cluster, or an explicit Kubernetes context.
+"""Set up, start or remove a saved Lotus installation.
 
 Python 3.9+ and kubectl are required. Local setup also needs kind and a running
 local Docker engine. A cold source build downloads pinned dependencies and can
@@ -8,6 +8,8 @@ take a substantial time. No provider credentials are requested by this script.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -15,7 +17,9 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -27,6 +31,7 @@ if str(ROOT) not in sys.path:
 from scripts import bootstrap_kind, configure_local, deploy_kubernetes, prepare_release
 
 STATE_NAME = "quickstart.json"
+DEFAULT_STATE = ROOT / ".lotus-local/quickstart"
 OWNER_KEY = "lotus.io/quickstart-owner"
 STAGES = {"checking", "preparing-python", "preparing-image", "creating-cluster", "checking-network",
           "creating-config", "creating-resources", "waiting-controller", "ready", "failed"}
@@ -47,6 +52,34 @@ def private_path(value, *, must_exist=False):
     if must_exist and not path.is_file():
         raise SetupError("The selected private file does not exist")
     return path
+
+
+def lifecycle_command(action, directory):
+    command = "./lotus " + action
+    if directory != DEFAULT_STATE:
+        command += " --state " + shlex.quote(str(directory))
+    return command
+
+
+@contextmanager
+def installation_lock(directory):
+    """Serialize installation changes; exec releases the startup lock."""
+    directory = private_path(directory)
+    directory.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    lock = private_path(directory.parent / ("." + directory.name + ".lock"))
+    descriptor = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        attributes = os.fstat(descriptor)
+        if not stat.S_ISREG(attributes.st_mode) or attributes.st_uid != os.getuid() or attributes.st_mode & 0o077:
+            raise SetupError("The installation lock is not a private regular file; it was preserved")
+        os.set_inheritable(descriptor, False)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SetupError("Another Lotus setup or removal is running for this installation; wait for it to finish") from None
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def run(argv, *, timeout=30, data=None, env=None):
@@ -147,7 +180,9 @@ def check(args):
         raise SetupError("New node capacity must be 6–64 GiB and 2–32 CPUs")
     args.state = private_path(args.state)
     if args.state.exists():
-        raise SetupError("Setup state already exists and was preserved. Use ./lotus serve --state PATH for a completed install")
+        raise SetupError("Setup state already exists and was preserved. Use " + lifecycle_command("serve", args.state)
+                         + " for a completed install")
+    args.port = args.port or 8000
     if args.kubeconfig:
         args.kubeconfig = private_path(args.kubeconfig, must_exist=True)
     try:
@@ -159,10 +194,10 @@ def check(args):
     if missing:
         raise SetupError("Install " + ", ".join(missing) + " and place "
                          + ("it" if len(missing) == 1 else "them")
-                         + " on PATH before setup. See README.md: Install dependencies. "
-                         "For the documented per-user tools, run: "
-                         "export PATH=\"$HOME/.local/share/lotus/bin:$PATH\". "
-                         "No global tools are installed automatically")
+                         + " on PATH before setup. On macOS run ./lotus deps"
+                         + (" --existing-context" if args.context else "")
+                         + "; on Linux see README.md: Install dependencies. "
+                         "This prerequisite check did not install anything")
     yaml_available = importlib.util.find_spec("yaml") is not None
     if not yaml_available and any(importlib.util.find_spec(name) is None for name in ("venv", "ensurepip")):
         raise SetupError("Python needs venv and ensurepip to install private setup dependencies. "
@@ -227,6 +262,8 @@ def network_check(args, directory, python):
     name = "lotus-netpol-" + uuid.uuid4().hex[:16]
     names = [name, name + "-sink"]
     output = directory / "network-policy.json"
+    bootstrap_kind.save(directory / "network-attempt.json", {"cluster_uid": owner, "context": args.context,
+                        "image": args.image, "namespaces": names})
     command = [python, str(ROOT / "k8s/verification/network_policy_preflight.py"), "--context", args.context,
                "--namespace", name, "--image", args.image, "--output", str(output), "--keep"]
     if args.kubeconfig:
@@ -386,7 +423,8 @@ def serve(args, state):
     verify_install(args, state)
     configure_local.ensure_port_available(args.port)
     print("Open http://127.0.0.1:%d — configure AI Setup, then Save & Test. Ctrl-C closes only this tunnel." % args.port, flush=True)
-    command = [sys.executable, str(ROOT / "scripts/serve_kubernetes.py"), "--context", args.context, "--port", str(args.port)]
+    command = [sys.executable, str(ROOT / "scripts/serve_kubernetes.py"), "--context", args.context, "--port", str(args.port),
+               "--installation-state", str(args.state), "--installation-nonce", state["nonce"]]
     if args.kubeconfig:
         command += ["--kubeconfig", str(args.kubeconfig)]
     # The foreground helper owns its port-forward child and handles SIGTERM /
@@ -395,10 +433,24 @@ def serve(args, state):
 
 
 def up(args):
+    args.state = private_path(args.state)
+    if args.state.exists():
+        state = load_install(args)
+        if args.check or args.no_serve:
+            readiness = verify_install(args, state)
+            summary = {"installed": True, "read_only": True, "context": args.context,
+                       "port": args.port, "ready": True, "readiness": readiness}
+            print(json.dumps(summary, indent=2), flush=True)
+            if not args.check:
+                print("Start Lotus: " + lifecycle_command("serve", args.state), flush=True)
+            return summary
+        print("Using the installed Lotus configuration…", flush=True)
+        return serve(args, state)
     summary = check(args)
-    print(json.dumps(summary, indent=2), flush=True)
     if args.check:
+        print(json.dumps(summary, indent=2), flush=True)
         return summary
+    print("Setting up Lotus…", flush=True)
     args.state.mkdir(parents=True, mode=0o700, exist_ok=False)
     state = {"schema_version": 1, "nonce": uuid.uuid4().hex, "mode": summary["mode"], "stage": "preparing-python",
              "directory": str(args.state), "context": args.context, "image": args.image, "port": args.port, "ready": False}
@@ -423,8 +475,11 @@ def up(args):
             state["owned_cluster"] = {"cluster": created["cluster"], "directory": created["directory"],
                                       "identity": created["cluster_identity"], "image_preparation": created["image_preparation"]}
         else:
-            state["stage"] = "checking-network"; save(state, args.state)
             capture_kubeconfig(args)
+            state.update(context=args.context, kubeconfig=str(args.kubeconfig) if args.kubeconfig else None,
+                         kubeconfig_sha256=sha(args.kubeconfig) if args.kubeconfig else None,
+                         cluster_uid=cluster_id(args), stage="checking-network")
+            save(state, args.state)
             print("Checking actual network enforcement in temporary owned namespaces…", flush=True)
             state["network"] = network_check(args, args.state, python)
         state.update(context=args.context, image=args.image, kubeconfig=str(args.kubeconfig) if args.kubeconfig else None,
@@ -441,45 +496,61 @@ def up(args):
         save(state, args.state)
         raise
     print("Controller and network checks passed. Native target builds and startup are checked for each audit.", flush=True)
-    print("Resume UI: ./lotus serve --state " + str(args.state), flush=True)
-    if not args.no_serve:
-        serve(args, state)
+    print("Setup complete. Start Lotus: " + lifecycle_command("serve", args.state), flush=True)
     return state
 
 
-def resume(args):
+def load_install(args):
     args.state = private_path(args.state)
+    if not (args.state / STATE_NAME).exists():
+        raise SetupError("No completed Lotus installation was found. Run " + lifecycle_command("up", args.state)
+                         + ("; if setup was interrupted, inspect it or run " + lifecycle_command("down", args.state)
+                            if args.state.exists() else ""))
     path = private_path(args.state / STATE_NAME, must_exist=True)
     if path.stat().st_size > 256 * 1024 or path.stat().st_mode & 0o077:
         raise SetupError("Setup receipt is oversized or not private; it was preserved")
     state = json.loads(path.read_text())
     if (state.get("schema_version") != 1 or state.get("ready") is not True or state.get("stage") != "ready"
             or state.get("directory") != str(args.state) or not re.fullmatch(r"[a-f0-9]{32}", state.get("nonce", ""))):
-        raise SetupError("Only a completed identity-bound install can resume; incomplete state was preserved")
+        raise SetupError("Only a completed installation can start. Setup is incomplete; inspect its logs or run "
+                         + lifecycle_command("down", args.state) + " before setting up again")
+    for option in ("context", "image"):
+        if getattr(args, option, None) and getattr(args, option) != state.get(option):
+            raise SetupError("The supplied " + option + " differs from the saved installation; use its saved configuration or a separate --state directory")
+    if getattr(args, "kubeconfig", None) and private_path(args.kubeconfig) != Path(state.get("kubeconfig") or ""):
+        raise SetupError("The supplied kubeconfig differs from the saved installation")
+    if getattr(args, "name", "lotus-netpol-local") != "lotus-netpol-local" and state.get("context") != "kind-" + args.name:
+        raise SetupError("The supplied cluster name differs from the saved installation; use a separate --state directory")
     args.context, args.image = state["context"], deploy_kubernetes.validate_image(state["image"])
     args.kubeconfig = Path(state["kubeconfig"]) if state.get("kubeconfig") else None
-    args.port = args.port or state["port"]
-    return serve(args, state)
+    args.port = configure_local.validate_port(args.port or state["port"])
+    return state
+
+
+def resume(args):
+    return serve(args, load_install(args))
 
 
 def parser():
-    result = argparse.ArgumentParser(description=__doc__)
+    result = argparse.ArgumentParser(prog="./lotus", description=__doc__)
     sub = result.add_subparsers(dest="action")
-    install = sub.add_parser("up", help="build and install on fresh local Kind, or an explicit existing Kubernetes context")
+    install = sub.add_parser("up", help="set up Lotus, or start it using the saved installation")
     install.add_argument("--check", action="store_true", help="read-only prerequisite and capacity check; no installs, builds or resources")
     install.add_argument("--context", help="explicit existing Kubernetes context; requires immutable --image and never uses Docker")
     install.add_argument("--kubeconfig", type=Path)
     install.add_argument("--image", type=deploy_kubernetes.validate_image, help="prebuilt immutable Lotus image; required for existing Kubernetes")
     install.add_argument("--local-preloaded", action="store_true", help="existing cluster only: require application image already present, with pull policy Never")
-    install.add_argument("--state", type=Path, default=ROOT / ".lotus-local/quickstart", help="new private install directory (default .lotus-local/quickstart)")
+    install.add_argument("--state", type=Path, default=DEFAULT_STATE, help="advanced: use a separate private installation directory")
     install.add_argument("--name", default="lotus-netpol-local", help="fresh local cluster name (default lotus-netpol-local)")
     install.add_argument("--node-memory-gib", type=int, default=6)
     install.add_argument("--node-cpus", type=int, default=3)
-    install.add_argument("--port", type=configure_local.validate_port, default=8000)
-    install.add_argument("--no-serve", action="store_true", help="finish after readiness; print the command to open the UI later")
-    reopen = sub.add_parser("serve", help="re-attest an existing quickstart installation and open its local UI; never redeploy")
-    reopen.add_argument("--state", type=Path, default=ROOT / ".lotus-local/quickstart")
+    install.add_argument("--port", type=configure_local.validate_port, help="local UI port (default 8000 for a new installation, saved port otherwise)")
+    install.add_argument("--no-serve", action="store_true", help="check readiness without opening the UI connection on an existing installation")
+    reopen = sub.add_parser("serve", help="start the local UI connection using the saved Lotus installation")
+    reopen.add_argument("--state", type=Path, default=DEFAULT_STATE, help="advanced: select a separate installation")
     reopen.add_argument("--port", type=configure_local.validate_port)
+    remove = sub.add_parser("down", help="remove this Lotus installation and its audit data; preserve unrelated resources")
+    remove.add_argument("--state", type=Path, default=DEFAULT_STATE, help="advanced: select a separate installation")
     return result
 
 
@@ -493,19 +564,32 @@ def main(argv=None):
         raise KeyboardInterrupt()
     previous = signal.signal(signal.SIGTERM, interrupt)
     try:
-        up(args) if args.action == "up" else resume(args)
+        def dispatch():
+            if args.action == "up":
+                return up(args)
+            if args.action == "serve":
+                return resume(args)
+            from scripts import installation_cleanup
+            return installation_cleanup.down(args)
+        if args.action == "up" and args.check:
+            dispatch()  # Read-only checks must not create even a lock directory.
+        elif not private_path(args.state).exists() and args.action in {"serve", "down"}:
+            dispatch()
+        else:
+            with installation_lock(args.state):
+                dispatch()
         return 0
     except KeyboardInterrupt:
-        print("Setup interrupted. Only owned command processes were stopped; retained state and cluster resources were preserved.", file=sys.stderr)
+        print("Lotus " + args.action + " interrupted. Owned command processes stopped; installation records were kept for retry.", file=sys.stderr)
         return 130
     except (SetupError, ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as error:
         # Only our fixed messages are shown. Unexpected/parser/provider output
         # is not safe to echo because it may contain bootstrap Secret values.
         message = str(error) if isinstance(error, (SetupError, RuntimeError)) else type(error).__name__
-        print("Lotus setup stopped: " + message, file=sys.stderr)
+        print("Lotus " + args.action + " stopped: " + message, file=sys.stderr)
         return 1
     except Exception as error:
-        print("Lotus setup stopped: invalid setup metadata (" + type(error).__name__ +
+        print("Lotus " + args.action + " stopped: invalid setup metadata (" + type(error).__name__ +
               "). Existing resources and private state were preserved for inspection.", file=sys.stderr)
         return 1
     finally:

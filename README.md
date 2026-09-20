@@ -2,7 +2,27 @@
 
 Lotus is an experimental codebase audit and triage platform for security researchers and product security teams, developed through security research and iterative testing. AI assists lab planning, test selection and analysis; supported dynamic tools run in a local lab, with results and coverage gaps carried into interactive reports.
 
-<img width="457" height="834" alt="lotus-diagram" src="https://github.com/user-attachments/assets/02e7d46c-6598-4040-9792-a56460ffa385" />
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"17px","lineColor":"#64748b","primaryTextColor":"#0f172a"},"flowchart":{"curve":"basis","nodeSpacing":18,"rankSpacing":24,"padding":10,"wrappingWidth":270}}}%%
+flowchart TD
+    C(["`**Clone repo**`"]) --> S("`**Static analysis**`")
+    C --> B("`**Build local lab**`")
+    B --> D("`**Dynamic testing**`")
+    S --> A("`**AI Analysis**`")
+    D --> A
+    A --> T("`**Triage and reproduce findings**`")
+    T --> R(["`**Generate report**`"])
+    classDef input fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
+    classDef analysis fill:#eef2ff,stroke:#818cf8,color:#312e81
+    classDef lab fill:#eff6ff,stroke:#60a5fa,color:#172554
+    classDef review fill:#ccfbf1,stroke:#0f766e,color:#134e4a
+    classDef output fill:#0f172a,stroke:#0f172a,color:#f8fafc
+    class C input
+    class S,A analysis
+    class B,D lab
+    class T review
+    class R output
+```
 
 [Features](#features) · [Quickstart](#quickstart) · [Web UI](#web-ui) · [Audits](#audit-workflow) · [Interactive reports](#interactive-reports) · [Deployments](#deployment-inventory) · [API / SDK](#api-and-sdk) · [Architecture](#architecture-and-isolation) · [Setup](#deployment-options) · [Operations](#operations) · [Python / export](#python-environment-and-source-export)
 
@@ -19,15 +39,26 @@ Lotus is an experimental codebase audit and triage platform for security researc
 
 ## Quickstart
 
-From a local checkout on macOS or Linux, first follow [Install dependencies](#install-dependencies). You need Python 3.9+ with `venv`, curl, Docker with a running local engine, kind and kubectl. No application Python packages, Node.js or Go are needed on the host. Docker hosts the local Kind node; audits and labs run in Kubernetes. An existing-cluster option needs no Docker.
+Run Lotus from the checkout directory on macOS or Linux. It needs Python 3.9+ with `venv` and `ensurepip`, curl, Docker with a running local engine, kind and kubectl. No application Python packages, Node.js or Go are needed on the host. Docker hosts the local Kind node; audits and labs run in Kubernetes. An existing-cluster option needs no Docker.
+
+On macOS, install missing dependencies once:
 
 ```sh
-export PATH="$HOME/.local/share/lotus/bin:$PATH"
-./lotus up --check
-./lotus up
+./lotus deps
 ```
 
-Run these commands from the directory containing `lotus` and `README.md`. `--check` checks prerequisites and capacity without installing tools or creating resources. Continue with `up` only after it succeeds. `up` installs pinned PyYAML in a private environment if needed, builds Lotus, creates a new Kind cluster with Calico, checks network restrictions, deploys the app and opens a foreground UI connection.
+Complete any Homebrew, Apple Command Line Tools or Docker Desktop prompts. On Linux, follow [Install dependencies](#install-dependencies) first. Then check, install and open Lotus:
+
+```sh
+./lotus up --check
+./lotus up
+./lotus serve
+```
+
+* `deps` installs missing macOS tools and opens Docker Desktop if needed. The launcher finds its per-user tools automatically; no PATH edit is needed for `./lotus`.
+* `up --check` checks prerequisites and capacity for a new installation, or readiness for a saved installation. It never installs dependencies or creates resources.
+* A plain first `./lotus up` can also install missing macOS dependencies. With any options, run `./lotus deps` first. Setup builds Lotus, creates Kind with Calico, checks network restrictions, deploys the app and finishes. It uses a private Python environment when needed.
+* `serve` opens the local UI using the saved configuration. No state path is needed.
 
 1. Open http://127.0.0.1:8000.
 2. In Settings → AI Model Source, save your provider/key, load models, select a text model and use Save & Test.
@@ -38,11 +69,15 @@ The interactive coverage map on Start is off by default. Enable Show coverage ma
 
 A successful primary-model completion test unlocks Start. Secondary-provider problems are handled when triage needs that review. Local paths are unsupported. Branch suggestions are limited to 512; an exact branch beyond the list can be entered and verified.
 
-Once setup reaches the foreground UI connection, Ctrl-C closes that connection while Lotus remains deployed. Reconnect with:
+Ctrl-C in `serve` closes the local connection; the installed app and audits keep running. Use `./lotus serve` to reconnect. After installation, `./lotus up` also opens this connection using the saved configuration instead of reinstalling.
+
+To remove this installation and its audit data:
 
 ```sh
-./lotus serve --state .lotus-local/quickstart
+./lotus down
 ```
+
+`down` closes its UI connection and removes the local cluster, its network and private installation files. On an existing Kubernetes cluster it removes the owned Lotus namespaces; the cluster is preserved. Unrelated containers and clusters, cached images, and host tools such as Homebrew, Python and Docker Desktop are kept. Run `./lotus up` again for a fresh installation.
 
 Setup defaults to a 6 GiB / 3 CPU node. The precheck requires another 1 GiB / 1 CPU beyond that allocation and considers current container memory use. The controller limit is 4 GiB; builds and optional analyzers need additional capacity. Cold image builds download dependencies and can take substantial time. No hosted Lotus release image is supplied.
 
@@ -247,35 +282,20 @@ Install the host prerequisites once, then return to [Quickstart](#quickstart). S
 
 #### macOS
 
-On a fresh Mac, install [Homebrew](https://brew.sh/) first if you want to use the terminal commands below. Its installer may prompt for your password and Apple's Command Line Tools; finish those prompts before continuing.
-
 ```sh
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-if [ -x /opt/homebrew/bin/brew ]; then
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-else
-  eval "$(/usr/local/bin/brew shellenv)"
-fi
+./lotus deps
 ```
 
-Skip the Homebrew installer if it is already installed. If Python 3.9+ is missing, install it and select that interpreter:
+* Missing Python and Docker Desktop are installed through [Homebrew](https://docs.brew.sh/Installation). If Homebrew is missing, its official interactive installer runs first. Finish any Command Line Tools or administrator prompts.
+* Missing kind 0.27.0 and kubectl 1.32.2 are downloaded from official releases, checked against their published SHA-256 checksums and installed in your own Lotus tools directory. Existing executables are preserved. If an existing kubectl is incompatible with the local cluster, Lotus preserves it and installs its own pinned client; an incompatible file already in the Lotus tools directory is left for you to inspect.
+* Docker Desktop opens if its engine is unavailable. Finish its [first-run setup](https://docs.docker.com/desktop/setup/install/mac-install/), including its terms and permission prompts. If setup is still waiting when the command exits, complete those steps and run `./lotus deps` again.
+* The helper does not change Docker resource limits, Kubernetes contexts or shell startup files. For a fresh default installation, allocate at least 8 GiB memory and 4 CPUs in Docker Desktop → Settings → Resources. More running containers need more headroom. Docker Desktop's built-in Kubernetes can stay off.
 
-```sh
-brew install python@3.12
-export LOTUS_PYTHON="$(brew --prefix python@3.12)/bin/python3.12"
-```
+Use a macOS version supported by [Homebrew](https://docs.brew.sh/Installation#macos-requirements) and [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/#system-requirements). Homebrew classifies Intel Macs as [Tier 3](https://docs.brew.sh/Support-Tiers), with limited support.
 
-If Docker Desktop is missing, install it, then open it and finish its first-run setup. Wait until `docker info` succeeds. These are the [Homebrew Docker Desktop commands](https://formulae.brew.sh/cask/docker-desktop):
+If you cannot use Homebrew, install [Python](https://www.python.org/downloads/macos/) and [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/) manually, then rerun `./lotus deps` for missing kind and kubectl. With the Python.org installer, also run its [Install Certificates.command](https://docs.python.org/3/using/mac.html#installation-steps) to finish HTTPS certificate setup. An explicit `LOTUS_PYTHON` must name a complete Python 3.9+ interpreter; it is never silently replaced.
 
-```sh
-brew install --cask docker-desktop
-open -a Docker
-docker info
-```
-
-Without Homebrew, use the [Python installer](https://www.python.org/downloads/macos/) and [Docker Desktop installer](https://docs.docker.com/desktop/setup/install/mac-install/) instead. An unwritable Homebrew directory does not need to be changed for the kind/kubectl installation below.
-
-In Docker Desktop → Settings → Resources, allocate at least 8 GiB memory and 4 CPUs for a fresh installation with no other containers. More running containers need more headroom. Apply the changes, wait for Docker to restart, then continue with the kind/kubectl commands below. Docker Desktop's built-in Kubernetes does not need to be enabled.
+For an existing Kubernetes cluster, `./lotus deps --existing-context` prepares only Python and kubectl. It does not install kind, install or open Docker Desktop, or contact that cluster. Select a kubectl version [compatible with your cluster](https://kubernetes.io/releases/version-skew-policy/#kubectl).
 
 #### Ubuntu / Debian
 
@@ -297,7 +317,10 @@ Log out and back in before continuing, then run `docker info` without sudo. Dock
 
 #### kind and kubectl, without administrator access
 
-Run this block on macOS or Linux. It downloads official release binaries, verifies their published SHA-256 checksums, and installs them in your own Lotus tools directory. The versions match the pinned local setup: kind 0.27.0 and Kubernetes 1.32.2. For an existing cluster, use a kubectl version [compatible with that cluster](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+<details>
+<summary>Manual binary installation</summary>
+
+Use this manual alternative on Linux, or on macOS if you prefer not to use `./lotus deps`. It downloads official release binaries, verifies their published SHA-256 checksums, and installs them in your own Lotus tools directory. The versions match the pinned local setup: kind 0.27.0 and Kubernetes 1.32.2. For an existing cluster, use a kubectl version [compatible with that cluster](https://kubernetes.io/releases/version-skew-policy/#kubectl).
 
 ```sh
 (
@@ -331,11 +354,15 @@ kind version
 kubectl version --client
 ```
 
-Repeat the `export PATH` line in each new terminal, or add it once to your shell's startup file. These commands follow the [kind binary installation](https://kind.sigs.k8s.io/docs/user/quick-start/#installing-from-release-binaries) and [kubectl checksum verification](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/#install-kubectl-binary-with-curl-on-linux) procedures.
+The launcher finds this directory automatically. The `export PATH` line is needed only to run kind or kubectl directly from your terminal. These commands follow the [kind binary installation](https://kind.sigs.k8s.io/docs/user/quick-start/#installing-from-release-binaries) and [kubectl checksum verification](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/#install-kubectl-binary-with-curl-on-linux) procedures.
+
+</details>
 
 Before running `./lotus up --check`, ensure Docker has at least 7 GiB currently free and 4 CPUs available to its engine for the default node. On Docker Desktop, adjust [Settings → Resources](https://docs.docker.com/desktop/settings-and-maintenance/settings/#resources) if needed; existing containers also consume memory. A passing precheck does not run a build or prove that a fresh installation will succeed.
 
 ### More local capacity or an existing cluster
+
+On macOS, run `./lotus deps` before setup with custom options, or `./lotus deps --existing-context` for the existing-cluster route.
 
 ```sh
 ./lotus up --check --state '<new-private-directory>' --name lotus-netpol-research \
@@ -347,26 +374,24 @@ Before running `./lotus up --check`, ensure Docker has at least 7 GiB currently 
 ```
 
 * Existing clusters need an enforcing CNI, persistent storage, node registry trust and installation permissions. This route needs no Docker or node modification.
-* Add `--kubeconfig PATH` or `--local-preloaded` as needed. `--no-serve` finishes after readiness.
-* `up` refuses existing state, same-named Kind clusters and existing Lotus namespaces. Use `serve --state PATH` to reopen an installation.
-* Failed setup preserves private state and uncertain resources for inspection. Do not delete ownership records or blindly repeat setup over them.
+* Removal stops if existing-cluster storage uses a `Retain` policy; an administrator must handle that data explicitly.
+* Add `--kubeconfig PATH` or `--local-preloaded` as needed for setup.
+* Default commands find this checkout's saved installation automatically. Only a separate installation created with `--state PATH` needs that option on `serve` and `down` too.
+* `up --check` checks a new installation's prerequisites or an existing installation's readiness without changing it. `up --no-serve` checks an existing installation without opening a UI connection.
+* Setup refuses same-named clusters and existing Lotus namespaces that it does not own. Saved ownership records protect unrelated resources during removal.
 
 ### Interrupted setup
 
-Ctrl-C during installation stops setup and preserves its state and any resources already created. It does not roll back the installation. `kind delete clusters --all` removes Kind clusters, but can leave the custom Docker networks Lotus created.
-
-* `--check` detects an existing cluster, setup directory or same-named Docker network before the application image is built.
-* Inspect a failed attempt's `quickstart.json`, `cluster/setup.log` and `cluster/ownership.json` in its state directory. An early failure may not have created every file.
-* Preserve that directory until cleanup is complete. A new attempt needs an unused cluster name and a new state directory; a completed installation uses `serve` instead.
-
-After stopping any resources from the interrupted attempt that still consume capacity, try a separate installation:
+Ctrl-C during installation stops setup and keeps its private records and any resources already created. Remove the interrupted installation before retrying:
 
 ```sh
-./lotus up --check --name lotus-netpol-retry --state .lotus-local/retry
-./lotus up --name lotus-netpol-retry --state .lotus-local/retry
+./lotus down
+./lotus up --check
+./lotus up
+./lotus serve
 ```
 
-Choose another name and directory if those already exist. Setup never deletes or reuses an unknown network automatically.
+Removal checks recorded resource identities before deleting anything. If an old or interrupted installation lacks enough ownership information, or a resource has been replaced, it stops and preserves the records for inspection. Check `quickstart.json`, `cluster/setup.log` and `cluster/ownership.json` under `.lotus-local/quickstart` (or the selected `--state` directory). Never delete those records before cleanup. A failed removal can be retried with `./lotus down`.
 
 ### Manual Kubernetes setup
 

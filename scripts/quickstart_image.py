@@ -374,6 +374,14 @@ def prepare_node(record, bootstrap_value, *, run=bootstrap_kind.command, stream=
         if immutable != source:
             attest(); execute(["ctr", "-n", "k8s.io", "images", "tag", source, immutable]); attest()
         require(listing(immutable) == target, "Immutable node image alias changed")
+        receipt["state"] = "preparing-registry"; bootstrap_kind.save(destination, receipt)
+        # Fresh Kind configures this path but may not create it. Create only
+        # the expected directory after checking its parents; never follow links.
+        attest()
+        execute(["sh", "-ceu", 'for p in /etc /etc/containerd; do test -d "$p"; test ! -L "$p"; done; '
+                 'd=/etc/containerd/certs.d; test ! -L "$d"; '
+                 'if ! test -e "$d"; then mkdir -m 0755 "$d"; fi; test -d "$d"; test ! -L "$d"'])
+        attest()
         authority = owner["node_ip"] + ":30500"
         hosts = 'server = "http://' + authority + '"\n[host."http://' + authority + '"]\n  capabilities = ["pull", "resolve"]\n'
         # Fixed script; the only interpolated shell positional argument is a

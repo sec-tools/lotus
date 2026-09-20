@@ -19,9 +19,23 @@ def validate_port(value):
 
 
 def ensure_port_available(port):
-    """Preflight the loopback binding; Docker still checks it again at startup."""
+    """Reject live or uncertain listeners while permitting closed TIME_WAIT sockets."""
+    port = validate_port(port)
+    # On macOS, REUSEADDR can shadow a wildcard listener with a more specific
+    # loopback bind. Check reachability first, without sending application data.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.25)
+        result = probe.connect_ex(("127.0.0.1", port))
+        if result == 0:
+            raise OSError(errno.EADDRINUSE, "A listener already accepts connections on this port")
+        if result != errno.ECONNREFUSED:
+            raise OSError(result, "Could not confirm that this local port is unused")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", validate_port(port)))
+        # The eventual server also binds independently; this is a preflight,
+        # not a reservation. listen checks conflicts that bind alone can miss.
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", port))
+        listener.listen(1)
 
 
 def create_config(path, port=8000):
