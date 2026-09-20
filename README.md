@@ -65,6 +65,8 @@ The launcher preserves existing installations and does not resize Docker. A comp
 
 ## Web UI
 
+<img width="640" height="440" alt="lotus-webui" src="https://github.com/user-attachments/assets/956e65a4-459c-4267-9159-c90e0fb3ec5b" />
+
 | Tab | What to do |
 | --- | --- |
 | Start | Launch an audit; follow tasks, console output and coverage. |
